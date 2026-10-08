@@ -4,6 +4,6 @@
     "direction": "above",
     "target": 1.0,
     "note": "cloud test 2 - delete me",
-    "triggered": false
+    "triggered": true
   }
 ]
