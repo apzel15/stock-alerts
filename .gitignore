@@ -1,0 +1,4 @@
+config.json
+alerts.log
+launchd.err
+__pycache__/

@@ -1,0 +1,33 @@
+name: Check stock alerts
+
+on:
+  schedule:
+    # Every 10 min, Mon–Fri, 13:00–21:59 UTC (covers US market hours in both EDT and EST)
+    - cron: "*/10 13-21 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-alerts
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check prices
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 stock_alerts.py check
+      - name: Save fired/re-armed state
+        run: |
+          if ! git diff --quiet alerts.json; then
+            git config user.name "stock-alerts-bot"
+            git config user.email "stock-alerts-bot@users.noreply.github.com"
+            git commit -am "Update alert state"
+            git pull --rebase && git push
+          fi
