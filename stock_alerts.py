@@ -55,7 +55,7 @@ def git(*args):
 def sync_pull():
     """Grab the latest alerts (incl. fired/re-armed state written by the cloud job)."""
     if not in_cloud() and (HERE / ".git").exists():
-        git("pull", "--rebase", "--quiet")
+        git("pull", "--rebase", "--autostash", "--quiet")
 
 
 def sync_push(message):
@@ -86,7 +86,7 @@ def get_price(symbol):
     return float(result[0]["meta"]["regularMarketPrice"])
 
 
-def notify(title, message):
+def notify(title, message, tag="chart_with_upwards_trend"):
     config = load(CONFIG_FILE, {})
     if sys.platform == "darwin" and config.get("mac_notifications", True):
         script = ('on run argv\n'
@@ -100,7 +100,7 @@ def notify(title, message):
             req = urllib.request.Request(
                 f"https://ntfy.sh/{topic}",
                 data=message.encode(),
-                headers={"Title": title, "Tags": "chart_with_upwards_trend"},
+                headers={"Title": title, "Tags": tag},
             )
             urllib.request.urlopen(req, timeout=15)
         except Exception as e:
@@ -162,11 +162,11 @@ def cmd_check(_):
             continue
         crossed = price >= a["target"] if a["direction"] == "above" else price <= a["target"]
         if crossed and not a["triggered"]:
-            arrow = "▲" if a["direction"] == "above" else "▼"
+            tag = "chart_with_upwards_trend" if a["direction"] == "above" else "chart_with_downwards_trend"
             msg = f"{a['symbol']} is ${price:,.2f} ({a['direction']} your ${a['target']:,.2f} target)"
             if a.get("note"):
                 msg += f" — {a['note']}"
-            notify(f"{arrow} {a['symbol']} price alert", msg)
+            notify(f"{a['symbol']} price alert", msg, tag)
             log(f"FIRED: {msg}")
             a["triggered"] = True
             changed = True
