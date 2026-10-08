@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "symbol": "AAPL",
+    "direction": "above",
+    "target": 1.0,
+    "note": "cloud test - delete me",
+    "triggered": false
+  }
+]
