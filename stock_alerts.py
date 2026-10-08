@@ -84,6 +84,8 @@ def log(msg):
 def session(now=None):
     """Which US trading session is open right now: 'day' (4am–8pm ET, Mon–Fri),
     'overnight' (8pm–4am ET, Sun night through Thu night), or None (weekend)."""
+    if os.environ.get("FORCE_SESSION") in ("day", "overnight"):  # for manual test runs
+        return os.environ["FORCE_SESSION"]
     now = now or datetime.now(ET)
     wd, hour = now.weekday(), now.hour  # Mon=0 … Sun=6
     if wd < 5 and 4 <= hour < 20:
@@ -229,7 +231,7 @@ def cmd_check(_):
 
 def cmd_price(args):
     for sym in args:
-        print(f"{sym.upper()}: ${get_price(sym.upper()):,.2f}")
+        print(f"{sym.upper()}: ${get_price(sym.upper()):,.2f}  ({session() or 'closed'} session)")
 
 
 def cmd_test(_):

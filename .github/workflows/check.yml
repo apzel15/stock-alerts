@@ -6,6 +6,11 @@ on:
     # (Fri 8pm ET – Sun 8pm ET), so this covers pre/regular/after-hours and overnight.
     - cron: "*/5 * * * 0-5"
   workflow_dispatch:
+    inputs:
+      force_session:
+        description: "Test a session's price source now (day / overnight); blank = normal"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -25,7 +30,10 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: python3 stock_alerts.py check
+          FORCE_SESSION: ${{ inputs.force_session }}
+        run: |
+          if [ -n "$FORCE_SESSION" ]; then python3 stock_alerts.py price AAPL NVDA; fi
+          python3 stock_alerts.py check
       - name: Save fired/re-armed state
         run: |
           if ! git diff --quiet alerts.json; then
