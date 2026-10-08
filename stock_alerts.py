@@ -4,6 +4,7 @@
 Usage:
   stock_alerts.py add AAPL above 350 ["optional note"]
   stock_alerts.py add TSLA below 200
+  stock_alerts.py add OLB every 0.05     # alert at each new 5-cent level, up or down
   stock_alerts.py list
   stock_alerts.py remove 3
   stock_alerts.py check          # fetch prices and fire any alerts (run on a schedule)
@@ -11,7 +12,8 @@ Usage:
   stock_alerts.py test           # send a test notification
 
 Alerts fire once when the price crosses the target, then re-arm automatically
-once the price moves back to the other side.
+once the price moves back to the other side. "every" alerts fire each time the
+price reaches a new multiple of the step (never twice in a row for the same level).
 
 Prices: Yahoo for 4am–8pm ET (incl. pre/after-hours), Alpaca's overnight feed for
 8pm–4am ET. Alpaca keys come from ALPACA_KEY_ID / ALPACA_SECRET_KEY env vars or
@@ -151,7 +153,7 @@ def notify(title, message, tag="chart_with_upwards_trend"):
             req = urllib.request.Request(
                 f"https://ntfy.sh/{topic}",
                 data=message.encode(),
-                headers={"Title": title, "Tags": tag},
+                headers={"Title": title, "Tags": tag, "Priority": "high"},
             )
             urllib.request.urlopen(req, timeout=15)
         except Exception as e:
@@ -159,18 +161,22 @@ def notify(title, message, tag="chart_with_upwards_trend"):
 
 
 def cmd_add(args):
-    if len(args) < 3 or args[1] not in ("above", "below"):
-        sys.exit("usage: add SYMBOL above|below PRICE [note]")
+    if len(args) < 3 or args[1] not in ("above", "below", "every"):
+        sys.exit("usage: add SYMBOL above|below|every PRICE [note]")
     symbol, direction, target = args[0].upper(), args[1], float(args[2])
     note = " ".join(args[3:])
     current = get_price(symbol)  # also validates the symbol
     sync_pull()
     alerts = load(ALERTS_FILE, [])
-    alerts.append({"symbol": symbol, "direction": direction, "target": target,
-                   "note": note, "triggered": False})
+    alert = {"symbol": symbol, "direction": direction, "target": target, "note": note}
+    if direction == "every":
+        alert["last"] = current  # levels are measured from here
+    else:
+        alert["triggered"] = False
+    alerts.append(alert)
     save_alerts(alerts)
     sync_push(f"Add alert: {symbol} {direction} {target}")
-    print(f"Added: {symbol} {direction} ${target:,.2f}  (now ${current:,.2f})")
+    print(f"Added: {symbol} {direction} {fmt(target)}  (now {fmt(current)})")
 
 
 def cmd_list(_):
@@ -180,9 +186,12 @@ def cmd_list(_):
         print("No alerts. Add one with: add AAPL above 350")
         return
     for i, a in enumerate(alerts, 1):
-        status = "FIRED (waiting to re-arm)" if a["triggered"] else "armed"
+        if a["direction"] == "every":
+            status = f"last alert at {fmt(a['last'])}"
+        else:
+            status = "FIRED (waiting to re-arm)" if a["triggered"] else "armed"
         note = f"  — {a['note']}" if a.get("note") else ""
-        print(f"{i:>2}. {a['symbol']:<6} {a['direction']:<5} ${a['target']:>10,.2f}  [{status}]{note}")
+        print(f"{i:>2}. {a['symbol']:<6} {a['direction']:<5} {fmt(a['target']):>11}  [{status}]{note}")
 
 
 def cmd_remove(args):
@@ -193,6 +202,36 @@ def cmd_remove(args):
     save_alerts(alerts)
     sync_push(f"Remove alert: {removed['symbol']} {removed['direction']} {removed['target']}")
     print(f"Removed: {removed['symbol']} {removed['direction']} ${removed['target']:,.2f}")
+
+
+def fmt(price):
+    """$1,234.56 normally; 4 decimals for sub-dollar stocks."""
+    if price >= 1:
+        return f"${price:,.2f}"
+    s = f"{price:.4f}".rstrip("0")
+    return "$" + s + "0" * max(0, 2 - len(s.split(".")[1]))
+
+
+def check_step(a, price):
+    """Alert when price reaches a step level other than the last one alerted.
+    Works in ten-thousandths of a dollar to avoid float rounding at the boundaries."""
+    step, p, last = (round(x * 10000) for x in (a["target"], price, a["last"]))
+    up_level = p // step * step        # highest level at or below price
+    down_level = -(-p // step) * step  # lowest level at or above price
+    if up_level > last:
+        level, word, tag = up_level, "up to", "chart_with_upwards_trend"
+    elif down_level < last:
+        level, word, tag = down_level, "down to", "chart_with_downwards_trend"
+    else:
+        return False
+    level /= 10000
+    msg = f"{a['symbol']} is {fmt(price)} (last alert was {fmt(a['last'])})"
+    if a.get("note"):
+        msg += f" — {a['note']}"
+    notify(f"{a['symbol']} {word} {fmt(level)}", msg, tag)
+    log(f"FIRED: {msg}")
+    a["last"] = level
+    return True
 
 
 def cmd_check(_):
@@ -211,10 +250,13 @@ def cmd_check(_):
         price = prices.get(a["symbol"])
         if price is None:
             continue
+        if a["direction"] == "every":
+            changed |= check_step(a, price)
+            continue
         crossed = price >= a["target"] if a["direction"] == "above" else price <= a["target"]
         if crossed and not a["triggered"]:
             tag = "chart_with_upwards_trend" if a["direction"] == "above" else "chart_with_downwards_trend"
-            msg = f"{a['symbol']} is ${price:,.2f} ({a['direction']} your ${a['target']:,.2f} target)"
+            msg = f"{a['symbol']} is {fmt(price)} ({a['direction']} your {fmt(a['target'])} target)"
             if a.get("note"):
                 msg += f" — {a['note']}"
             notify(f"{a['symbol']} price alert", msg, tag)
