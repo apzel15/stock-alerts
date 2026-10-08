@@ -13,6 +13,10 @@ Usage:
 Alerts fire once when the price crosses the target, then re-arm automatically
 once the price moves back to the other side.
 
+Prices: Yahoo for 4am–8pm ET (incl. pre/after-hours), Alpaca's overnight feed for
+8pm–4am ET. Alpaca keys come from ALPACA_KEY_ID / ALPACA_SECRET_KEY env vars or
+config.json ("alpaca_key_id", "alpaca_secret_key").
+
 Phone push: put an ntfy.sh topic in config.json as {"ntfy_topic": "..."} (or the
 NTFY_TOPIC env var) and subscribe to that topic in the ntfy app.
 
@@ -26,11 +30,13 @@ import sys
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
 ALERTS_FILE = HERE / "alerts.json"
 CONFIG_FILE = HERE / "config.json"
 LOG_FILE = HERE / "alerts.log"
+ET = ZoneInfo("America/New_York")
 
 
 def load(path, default):
@@ -75,7 +81,20 @@ def log(msg):
         f.write(line + "\n")
 
 
-def get_price(symbol):
+def session(now=None):
+    """Which US trading session is open right now: 'day' (4am–8pm ET, Mon–Fri),
+    'overnight' (8pm–4am ET, Sun night through Thu night), or None (weekend)."""
+    now = now or datetime.now(ET)
+    wd, hour = now.weekday(), now.hour  # Mon=0 … Sun=6
+    if wd < 5 and 4 <= hour < 20:
+        return "day"
+    if (hour >= 20 and wd in (6, 0, 1, 2, 3)) or (hour < 4 and wd in (0, 1, 2, 3, 4)):
+        return "overnight"
+    return None
+
+
+def yahoo_price(symbol):
+    """Latest consolidated price, including pre-market and after-hours (4am–8pm ET)."""
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -83,7 +102,37 @@ def get_price(symbol):
     result = data["chart"]["result"]
     if not result:
         raise ValueError(f"no data for {symbol}")
-    return float(result[0]["meta"]["regularMarketPrice"])
+    meta = result[0]["meta"]
+    return float(meta.get("fulldayPrice") or meta["regularMarketPrice"])
+
+
+def alpaca_keys():
+    config = load(CONFIG_FILE, {})
+    key = os.environ.get("ALPACA_KEY_ID") or config.get("alpaca_key_id")
+    secret = os.environ.get("ALPACA_SECRET_KEY") or config.get("alpaca_secret_key")
+    return (key, secret) if key and secret else None
+
+
+def alpaca_overnight_price(symbol, keys):
+    """Latest 1-min bar from Alpaca's free overnight feed (Blue Ocean, 8pm–4am ET)."""
+    url = f"https://data.alpaca.markets/v2/stocks/bars/latest?symbols={symbol}&feed=overnight"
+    req = urllib.request.Request(url, headers={
+        "APCA-API-KEY-ID": keys[0], "APCA-API-SECRET-KEY": keys[1]})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.load(resp)
+    bar = data.get("bars", {}).get(symbol)
+    if not bar:
+        raise ValueError(f"no overnight data for {symbol}")
+    return float(bar["c"])
+
+
+def get_price(symbol):
+    if session() == "overnight":
+        keys = alpaca_keys()
+        if keys:
+            return alpaca_overnight_price(symbol, keys)
+        log("no Alpaca keys set; using Yahoo (no overnight prices)")
+    return yahoo_price(symbol)
 
 
 def notify(title, message, tag="chart_with_upwards_trend"):
@@ -146,7 +195,7 @@ def cmd_remove(args):
 
 def cmd_check(_):
     alerts = load(ALERTS_FILE, [])
-    if not alerts:
+    if not alerts or session() is None:
         return
     prices = {}
     for sym in {a["symbol"] for a in alerts}:

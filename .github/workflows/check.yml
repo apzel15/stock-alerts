@@ -2,8 +2,9 @@ name: Check stock alerts
 
 on:
   schedule:
-    # Every 10 min, Mon–Fri, 13:00–21:59 UTC (covers US market hours in both EDT and EST)
-    - cron: "*/10 13-21 * * 1-5"
+    # Every 5 min, Sun–Fri UTC. The script itself skips when no session is open
+    # (Fri 8pm ET – Sun 8pm ET), so this covers pre/regular/after-hours and overnight.
+    - cron: "*/5 * * * 0-5"
   workflow_dispatch:
 
 permissions:
@@ -22,6 +23,8 @@ jobs:
       - name: Check prices
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: python3 stock_alerts.py check
       - name: Save fired/re-armed state
         run: |
